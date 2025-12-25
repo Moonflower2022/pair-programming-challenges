@@ -7,30 +7,48 @@
             }
 
             const getWorkerModule = (moduleUrl: unknown, label: string) => {
-                return new Worker((self as any).MonacoEnvironment.getWorkerUrl(moduleUrl), {
-                    name: label,
-                    type: 'module'
-                });
+                return new Worker(
+                    (self as any).MonacoEnvironment.getWorkerUrl(moduleUrl),
+                    {
+                        name: label,
+                        type: "module",
+                    },
+                );
             };
 
             switch (label) {
-                case 'json':
-                    return getWorkerModule('/monaco-editor/esm/vs/language/json/json.worker?worker', label);
-                case 'css':
-                case 'scss':
-                case 'less':
-                    return getWorkerModule('/monaco-editor/esm/vs/language/css/css.worker?worker', label);
-                case 'html':
-                case 'handlebars':
-                case 'razor':
-                    return getWorkerModule('/monaco-editor/esm/vs/language/html/html.worker?worker', label);
-                case 'typescript':
-                case 'javascript':
-                    return getWorkerModule('/monaco-editor/esm/vs/language/typescript/ts.worker?worker', label);
+                case "json":
+                    return getWorkerModule(
+                        "/monaco-editor/esm/vs/language/json/json.worker?worker",
+                        label,
+                    );
+                case "css":
+                case "scss":
+                case "less":
+                    return getWorkerModule(
+                        "/monaco-editor/esm/vs/language/css/css.worker?worker",
+                        label,
+                    );
+                case "html":
+                case "handlebars":
+                case "razor":
+                    return getWorkerModule(
+                        "/monaco-editor/esm/vs/language/html/html.worker?worker",
+                        label,
+                    );
+                case "typescript":
+                case "javascript":
+                    return getWorkerModule(
+                        "/monaco-editor/esm/vs/language/typescript/ts.worker?worker",
+                        label,
+                    );
                 default:
-                    return getWorkerModule('/monaco-editor/esm/vs/editor/editor.worker?worker', label);
+                    return getWorkerModule(
+                        "/monaco-editor/esm/vs/editor/editor.worker?worker",
+                        label,
+                    );
             }
-        }
+        },
     };
 
     export const LOADING = Symbol("MonacoLoading");
@@ -38,16 +56,26 @@
 
 <script lang="ts">
     import type * as monaco from "monaco-editor";
-    import { onMount } from "svelte"
+    import { onMount } from "svelte";
 
     let container: HTMLDivElement;
-    let editor = $state<monaco.editor.IStandaloneCodeEditor | undefined>(undefined);
+    let editor = $state<monaco.editor.IStandaloneCodeEditor | undefined>(
+        undefined,
+    );
 
     type Props = {
         value: string | typeof LOADING;
     };
 
     let { value = $bindable(LOADING) }: Props = $props();
+
+    $effect(() => {
+        if (editor !== undefined && value !== LOADING) {
+            if (editor.getValue() !== value) {
+                editor.setValue(value);
+            }
+        }
+    });
 
     onMount(() => {
         (async () => {
@@ -70,7 +98,7 @@
         return () => {
             editor?.dispose();
         };
-    })
+    });
 </script>
 
 <div class="monaco-editor" bind:this={container}></div>

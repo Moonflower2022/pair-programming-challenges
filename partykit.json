@@ -1,0 +1,4 @@
+{
+    "name": "pair-challenge",
+    "main": "party/server.ts"
+}

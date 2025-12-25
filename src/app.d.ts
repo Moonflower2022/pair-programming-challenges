@@ -10,4 +10,10 @@ declare global {
 	}
 }
 
-export {};
+declare global {
+	interface Window {
+		syncText: (v: string) => void;
+	}
+}
+
+export { };
