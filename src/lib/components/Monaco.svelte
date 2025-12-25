@@ -62,7 +62,11 @@
                 inherit: false,
                 rules: [
                     { token: "", foreground: "cccccc", background: "0c0c0c" },
-                    { token: "comment", foreground: "666666", fontStyle: "italic" },
+                    {
+                        token: "comment",
+                        foreground: "666666",
+                        fontStyle: "italic",
+                    },
                     { token: "keyword", foreground: "00ff41" },
                     { token: "keyword.control", foreground: "00ff41" },
                     { token: "string", foreground: "ffff00" },
@@ -110,7 +114,7 @@
                 scrollBeyondLastLine: false,
                 renderLineHighlight: "line",
                 cursorBlinking: "phase",
-                cursorStyle: "block",
+                cursorStyle: "line",
             });
 
             if (value !== LOADING) {

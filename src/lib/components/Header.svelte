@@ -97,7 +97,7 @@
 </script>
 
 <header>
-    <h2>Pair Programming Challenge</h2>
+    <h2>Pair Programming Challenge 👬</h2>
     <div class="timer-section">
         <span class="timer">{formatTime(elapsed)}</span>
         {#if timerStartedAt === null}
