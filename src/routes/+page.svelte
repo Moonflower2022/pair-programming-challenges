@@ -1,11 +1,17 @@
 <script lang="ts">
     import Monaco, { LOADING } from "$lib/components/Monaco.svelte";
-    import Terminal, { CommandContext } from "$lib/components/Terminal.svelte";
+    import Header from "$lib/components/Header.svelte";
+    import Terminal, {
+        CommandContext,
+        type CommandSession,
+    } from "$lib/components/Terminal.svelte";
     import { PythonEngine } from "$lib/engine/python";
     import { onMount } from "svelte";
     import YPartyKitProvider from "y-partykit/provider";
     import { MonacoBinding } from "y-monaco";
     import type * as monaco from "monaco-editor";
+    import type * as Y from "yjs";
+    import type { Awareness } from "y-protocols/awareness";
 
     const ENGINE = new PythonEngine();
 
@@ -15,20 +21,59 @@
 
     let binding: MonacoBinding | undefined;
 
+    // yjs state for terminal
+    let terminalYArray: Y.Array<CommandSession> | undefined = $state();
+    let terminalAwareness: Awareness | undefined = $state();
+
+    // Resizable terminal state
+    let terminalHeight = $state(200);
+    let isResizing = $state(false);
+    let containerRef: HTMLDivElement | undefined = $state();
+
+    // Terminal component reference
+    let terminalRef: ReturnType<typeof Terminal> | undefined;
+
+    function startResize(e: MouseEvent) {
+        e.preventDefault();
+        isResizing = true;
+        document.addEventListener("mousemove", onResize);
+        document.addEventListener("mouseup", stopResize);
+    }
+
+    function onResize(e: MouseEvent) {
+        if (!isResizing || !containerRef) return;
+        const containerRect = containerRef.getBoundingClientRect();
+        const newHeight = containerRect.bottom - e.clientY;
+        // Clamp between 100px and 80% of container height
+        const maxHeight = containerRect.height * 0.8;
+        const minHeight = 100;
+        terminalHeight = Math.max(minHeight, Math.min(maxHeight, newHeight));
+    }
+
+    function stopResize() {
+        isResizing = false;
+        document.removeEventListener("mousemove", onResize);
+        document.removeEventListener("mouseup", stopResize);
+    }
+
     onMount(async () => {
         const Y = await import("yjs");
 
-        const doc = new Y.Doc();
+        const yDoc = new Y.Doc();
         const provider = new YPartyKitProvider(
             `${document.location.hostname}:1999`,
             "pair-challenge",
-            doc,
+            yDoc,
             {
                 protocol: "ws",
             },
         );
 
-        const yText = doc.getText("shared");
+        const yText = yDoc.getText("shared");
+
+        // Set up terminal yArray and awareness
+        terminalYArray = yDoc.getArray<CommandSession>("terminal-sessions");
+        terminalAwareness = provider.awareness;
 
         const waitForEditor = setInterval(() => {
             const model = monacoEditor?.getModel();
@@ -54,9 +99,8 @@
                 break;
 
             case "clear":
-                context.info("Use Ctrl+L or refresh to clear terminal");
-                context.complete();
-                break;
+                terminalRef?.clear();
+                return;
 
             case "help":
                 showHelp(context);
@@ -133,23 +177,40 @@
         context.info("Available commands:");
         context.info("  run   - Execute the Python code in the editor");
         context.info("  help  - Show this help message");
-        context.info("  clear - Instructions to clear terminal");
+        context.info("  clear - Clear the terminal");
         context.complete();
     }
 </script>
 
-<div class="page-container">
+<div
+    class="page-container"
+    bind:this={containerRef}
+    class:resizing={isResizing}
+>
+    <Header />
+
     <div class="editor-section">
         <Monaco bind:value={monacoValue} bind:editor={monacoEditor} />
     </div>
 
-    <div class="terminal-section">
-        <Terminal
-            onCommand={handleCommand}
-            welcomeMessage="🚀 Welcome to the code challenge terminal!
+    <div
+        class="resize-handle"
+        onmousedown={startResize}
+        role="separator"
+        aria-orientation="horizontal"
+        tabindex="0"
+    ></div>
 
-Type 'run' to execute your Python code or 'help' for available commands."
+    <div class="terminal-section" style="height: {terminalHeight}px">
+        <Terminal
+            bind:this={terminalRef}
+            onCommand={handleCommand}
+            welcomeMessage="Welcome to the code challenge terminal!
+
+Type 'run' to execute your Python code, 'help' for available commands, or 'clear' to clear the terminal."
             maxHeight="100%"
+            yArray={terminalYArray}
+            awareness={terminalAwareness}
         />
     </div>
 </div>
@@ -163,14 +224,45 @@ Type 'run' to execute your Python code or 'help' for available commands."
         overflow: hidden;
     }
 
+    .page-container.resizing {
+        cursor: ns-resize;
+        user-select: none;
+    }
+
     .editor-section {
         flex: 1;
         min-height: 0;
         overflow: hidden;
     }
 
+    .resize-handle {
+        height: 6px;
+        background: #333;
+        cursor: ns-resize;
+        flex-shrink: 0;
+        position: relative;
+    }
+
+    .resize-handle::before {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        width: 40px;
+        height: 2px;
+        background: #666;
+    }
+
+    .resize-handle:hover {
+        background: #444;
+    }
+
+    .resize-handle:hover::before {
+        background: #888;
+    }
+
     .terminal-section {
-        height: 200px;
         flex-shrink: 0;
     }
 </style>

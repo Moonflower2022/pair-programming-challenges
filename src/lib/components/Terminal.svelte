@@ -1,25 +1,20 @@
 <script module lang="ts">
+    import type * as Y from "yjs";
+    import type { Awareness } from "y-protocols/awareness";
+
     if (!crypto.randomUUID) {
         crypto.randomUUID =
             function randomUUID(): `${string}-${string}-${string}-${string}-${string}` {
-                // Use crypto.getRandomValues if available for better randomness
                 if (crypto.getRandomValues) {
-                    // Generate 16 random bytes
                     const bytes = new Uint8Array(16);
                     crypto.getRandomValues(bytes);
-
-                    // Set version (4) and variant bits according to RFC4122
-                    bytes[6] = (bytes[6] & 0x0f) | 0x40; // Version 4
-                    bytes[8] = (bytes[8] & 0x3f) | 0x80; // Variant 10
-
-                    // Convert to UUID string format
+                    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+                    bytes[8] = (bytes[8] & 0x3f) | 0x80;
                     const hex = Array.from(bytes, (byte) =>
                         byte.toString(16).padStart(2, "0"),
                     ).join("");
                     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
                 }
-
-                // Fallback to Math.random() (less secure)
                 return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(
                     /[xy]/g,
                     function (c) {
@@ -31,18 +26,59 @@
             };
     }
 
-    export class CommandContext {
-        private session: CommandSession;
-        private recomputeScroll: () => void;
+    export interface LogEntry {
+        text: string;
+        type: "info" | "error" | "success" | "warning";
+        timestamp: number;
+    }
 
-        constructor(session: CommandSession, recomputeScroll?: () => void) {
-            this.session = session;
-            this.recomputeScroll = recomputeScroll || (() => {});
+    export interface CommandSession {
+        id: string;
+        command: string;
+        timestamp: number;
+        logs: LogEntry[];
+        status: "running" | "completed" | "error";
+        ownerId: number; // awareness clientId of the owner
+    }
+
+    export class CommandContext {
+        private sessionId: string;
+        private yArray: Y.Array<CommandSession>;
+        private autoScroll: () => void;
+
+        constructor(
+            sessionId: string,
+            yArray: Y.Array<CommandSession>,
+            autoScroll?: () => void,
+        ) {
+            this.sessionId = sessionId;
+            this.yArray = yArray;
+            this.autoScroll = autoScroll || (() => {});
+        }
+
+        private updateSession(
+            updater: (session: CommandSession) => CommandSession,
+        ) {
+            const arr = this.yArray.toArray();
+            const index = arr.findIndex((s) => s.id === this.sessionId);
+            if (index === -1) return;
+
+            const session = arr[index];
+            const updated = updater({ ...session, logs: [...session.logs] });
+
+            this.yArray.doc?.transact(() => {
+                this.yArray.delete(index, 1);
+                this.yArray.insert(index, [updated]);
+            });
+
+            this.autoScroll();
         }
 
         log(text: string, type: LogEntry["type"] = "info") {
-            this.session.logs.push({ text, type, timestamp: new Date() });
-            this.recomputeScroll();
+            this.updateSession((session) => {
+                session.logs.push({ text, type, timestamp: Date.now() });
+                return session;
+            });
         }
 
         info(text: string) {
@@ -62,43 +98,38 @@
         }
 
         complete() {
-            this.session.status = "completed";
-            this.recomputeScroll();
+            this.updateSession((session) => {
+                session.status = "completed";
+                return session;
+            });
         }
 
         fail() {
-            this.session.status = "error";
-            this.recomputeScroll();
+            this.updateSession((session) => {
+                session.status = "error";
+                return session;
+            });
         }
     }
 </script>
 
 <script lang="ts">
-    interface LogEntry {
-        text: string;
-        type: "info" | "error" | "success" | "warning";
-        timestamp: Date;
-    }
-
-    interface CommandSession {
-        id: string;
-        command: string;
-        timestamp: Date;
-        logs: LogEntry[];
-        status: "running" | "completed" | "error";
-        collapsed: boolean;
-    }
+    import { onDestroy, untrack } from "svelte";
 
     interface Props {
         welcomeMessage?: string;
         onCommand?: (command: string, context: CommandContext) => void;
         maxHeight?: string;
+        yArray?: Y.Array<CommandSession>;
+        awareness?: Awareness;
     }
 
     let {
         welcomeMessage = "Terminal ready. Type a command to begin...",
         onCommand = () => {},
         maxHeight = "600px",
+        yArray,
+        awareness,
     }: Props = $props();
 
     let sessions = $state<CommandSession[]>([]);
@@ -109,52 +140,194 @@
     let commandHistory = $state<string[]>([]);
     let historyIndex = $state(-1);
     let isNearBottom = $state(true);
+    let collapsedSessions = $state<Set<string>>(new Set());
 
-    const SCROLL_THRESHOLD = 150; // pixels from bottom
+    const SCROLL_THRESHOLD = 10;
 
-    // Show welcome message on mount
-    $effect(() => {
-        if (sessions.length === 0 && welcomeMessage) {
-            const welcomeSession = $state({
-                id: "welcome",
-                command: "system",
-                timestamp: new Date(),
-                logs: [
-                    {
-                        text: welcomeMessage,
-                        type: "info" as const,
-                        timestamp: new Date(),
-                    },
-                ],
-                status: "completed" as const,
-                collapsed: false,
+    // Track connected client IDs
+    let connectedClients = $state<Set<number>>(new Set());
+
+    // Track if we've initialized with yArray
+    let initializedWithYArray = false;
+    let currentYArray: Y.Array<CommandSession> | undefined;
+    let currentAwareness: Awareness | undefined;
+
+    // Sync sessions from yArray
+    function syncFromYArray() {
+        if (!currentYArray) return;
+        sessions = currentYArray.toArray();
+        autoScrollIfNeeded();
+    }
+
+    // Handle awareness changes to detect disconnections
+    function handleAwarenessChange() {
+        if (!currentAwareness || !currentYArray) return;
+
+        const states = currentAwareness.getStates();
+        const newConnectedClients = new Set<number>();
+
+        states.forEach((_, clientId) => {
+            newConnectedClients.add(clientId);
+        });
+
+        // Find clients that disconnected
+        const disconnectedClients = [...connectedClients].filter(
+            (id) => !newConnectedClients.has(id),
+        );
+
+        // Mark running sessions owned by disconnected clients as errored
+        if (disconnectedClients.length > 0) {
+            const arr = currentYArray.toArray();
+            const updates: { index: number; session: CommandSession }[] = [];
+
+            arr.forEach((session, index) => {
+                if (
+                    session.status === "running" &&
+                    disconnectedClients.includes(session.ownerId)
+                ) {
+                    updates.push({
+                        index,
+                        session: {
+                            ...session,
+                            status: "error",
+                            logs: [
+                                ...session.logs,
+                                {
+                                    text: "disconnected",
+                                    type: "error",
+                                    timestamp: Date.now(),
+                                },
+                            ],
+                        },
+                    });
+                }
             });
-            sessions.push(welcomeSession);
+
+            if (updates.length > 0) {
+                currentYArray.doc?.transact(() => {
+                    // Process in reverse to maintain correct indices
+                    for (let i = updates.length - 1; i >= 0; i--) {
+                        const { index, session } = updates[i];
+                        currentYArray!.delete(index, 1);
+                        currentYArray!.insert(index, [session]);
+                    }
+                });
+            }
+        }
+
+        connectedClients = newConnectedClients;
+    }
+
+    // React to yArray prop changes
+    $effect(() => {
+        // Capture the props we're reacting to
+        const newYArray = yArray;
+        const newAwareness = awareness;
+
+        // Use untrack for all side effects to prevent infinite loops
+        untrack(() => {
+            // Clean up previous subscriptions
+            if (currentYArray && currentYArray !== newYArray) {
+                currentYArray.unobserve(syncFromYArray);
+            }
+            if (currentAwareness && currentAwareness !== newAwareness) {
+                currentAwareness.off("change", handleAwarenessChange);
+            }
+
+            currentYArray = newYArray;
+            currentAwareness = newAwareness;
+
+            if (!newYArray) {
+                // Non-yjs mode: show welcome message locally if not already shown
+                if (!initializedWithYArray && sessions.length === 0 && welcomeMessage) {
+                    sessions = [
+                        {
+                            id: "welcome",
+                            command: "system",
+                            timestamp: Date.now(),
+                            logs: [
+                                {
+                                    text: welcomeMessage,
+                                    type: "info",
+                                    timestamp: Date.now(),
+                                },
+                            ],
+                            status: "completed",
+                            ownerId: -1,
+                        },
+                    ];
+                }
+                return;
+            }
+
+            initializedWithYArray = true;
+
+            // Initialize from yArray
+            sessions = newYArray.toArray();
+
+            // Add welcome message only if array is empty (first client to join)
+            if (newYArray.length === 0 && welcomeMessage) {
+                newYArray.push([
+                    {
+                        id: crypto.randomUUID(),
+                        command: "system",
+                        timestamp: Date.now(),
+                        logs: [
+                            {
+                                text: welcomeMessage,
+                                type: "info",
+                                timestamp: Date.now(),
+                            },
+                        ],
+                        status: "completed",
+                        ownerId: -1,
+                    },
+                ]);
+            }
+
+            // Listen to yArray changes
+            newYArray.observe(syncFromYArray);
+
+            // Listen to awareness changes
+            if (newAwareness) {
+                handleAwarenessChange();
+                newAwareness.on("change", handleAwarenessChange);
+            }
+        });
+    });
+
+    onDestroy(() => {
+        if (currentYArray) {
+            currentYArray.unobserve(syncFromYArray);
+        }
+        if (currentAwareness) {
+            currentAwareness.off("change", handleAwarenessChange);
         }
     });
 
-    function recomputeScroll() {
+    function handleScroll() {
         if (!terminalContentRef) return;
-
-        if (isNearBottom) {
-            terminalContentRef.scrollTop = terminalContentRef.scrollHeight;
-        }
-
         const { scrollTop, scrollHeight, clientHeight } = terminalContentRef;
         const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-
         isNearBottom = distanceFromBottom < SCROLL_THRESHOLD;
+    }
+
+    function autoScrollIfNeeded() {
+        requestAnimationFrame(() => {
+            if (!terminalContentRef) return;
+            if (isNearBottom) {
+                terminalContentRef.scrollTop = terminalContentRef.scrollHeight;
+            }
+            handleScroll();
+        });
     }
 
     function scrollToBottom() {
         if (!terminalContentRef) return;
-
         terminalContentRef.scrollTo({
             top: terminalContentRef.scrollHeight,
             behavior: "smooth",
         });
-
-        // Immediately set isNearBottom to true to resume auto-scrolling
         isNearBottom = true;
     }
 
@@ -163,30 +336,68 @@
         const command = inputValue.trim();
         if (!command) return;
 
-        // Add to history
         commandHistory.push(command);
         historyIndex = -1;
 
-        // Create new session with reactive properties
-        const session = $state({
-            id: crypto.randomUUID(),
+        const sessionId = crypto.randomUUID();
+        const ownerId = awareness?.clientID ?? -1;
+
+        const newSession: CommandSession = {
+            id: sessionId,
             command,
-            timestamp: new Date(),
-            logs: [] as LogEntry[],
-            status: "running" as "running" | "completed" | "error",
-            collapsed: false,
-        });
+            timestamp: Date.now(),
+            logs: [],
+            status: "running",
+            ownerId,
+        };
 
-        sessions.push(session);
+        if (yArray) {
+            yArray.push([newSession]);
+            const context = new CommandContext(
+                sessionId,
+                yArray,
+                autoScrollIfNeeded,
+            );
+            inputValue = "";
+            onCommand(command, context);
+        } else {
+            // Fallback for non-yjs mode
+            sessions = [...sessions, newSession];
+            inputValue = "";
 
-        // Create context without updateFn
-        const context = new CommandContext(session, recomputeScroll);
-
-        // Clear input immediately
-        inputValue = "";
-
-        // Execute command asynchronously
-        onCommand(command, context);
+            // Create a simple context that updates local state
+            const localContext = {
+                log: (text: string, type: LogEntry["type"] = "info") => {
+                    const idx = sessions.findIndex((s) => s.id === sessionId);
+                    if (idx !== -1) {
+                        sessions[idx].logs = [
+                            ...sessions[idx].logs,
+                            { text, type, timestamp: Date.now() },
+                        ];
+                        autoScrollIfNeeded();
+                    }
+                },
+                info: (text: string) => localContext.log(text, "info"),
+                error: (text: string) => localContext.log(text, "error"),
+                success: (text: string) => localContext.log(text, "success"),
+                warning: (text: string) => localContext.log(text, "warning"),
+                complete: () => {
+                    const idx = sessions.findIndex((s) => s.id === sessionId);
+                    if (idx !== -1) {
+                        sessions[idx].status = "completed";
+                        autoScrollIfNeeded();
+                    }
+                },
+                fail: () => {
+                    const idx = sessions.findIndex((s) => s.id === sessionId);
+                    if (idx !== -1) {
+                        sessions[idx].status = "error";
+                        autoScrollIfNeeded();
+                    }
+                },
+            };
+            onCommand(command, localContext as unknown as CommandContext);
+        }
     }
 
     function handleKeyDown(e: KeyboardEvent) {
@@ -213,23 +424,42 @@
     }
 
     function toggleCollapse(sessionId: string) {
-        const session = sessions.find((s) => s.id === sessionId);
-        if (session) {
-            session.collapsed = !session.collapsed;
+        if (collapsedSessions.has(sessionId)) {
+            collapsedSessions.delete(sessionId);
+        } else {
+            collapsedSessions.add(sessionId);
         }
+        collapsedSessions = new Set(collapsedSessions);
+    }
+
+    function isCollapsed(sessionId: string): boolean {
+        return collapsedSessions.has(sessionId);
     }
 
     function focusInput() {
         inputRef?.focus();
     }
 
-    function formatTime(date: Date): string {
-        return date.toLocaleTimeString("en-US", {
+    function formatTime(timestamp: number): string {
+        return new Date(timestamp).toLocaleTimeString("en-US", {
             hour12: false,
             hour: "2-digit",
             minute: "2-digit",
             second: "2-digit",
         });
+    }
+
+    export function clear() {
+        if (yArray) {
+            // Clear all sessions from the shared yArray
+            yArray.doc?.transact(() => {
+                yArray.delete(0, yArray.length);
+            });
+        } else {
+            // Clear local sessions
+            sessions = [];
+        }
+        collapsedSessions = new Set();
     }
 </script>
 
@@ -242,10 +472,13 @@
     <div
         class="terminal-content"
         bind:this={terminalContentRef}
-        onscroll={recomputeScroll}
+        onscroll={handleScroll}
     >
         {#each sessions as session (session.id)}
-            <div class="command-session" class:collapsed={session.collapsed}>
+            <div
+                class="command-session"
+                class:collapsed={isCollapsed(session.id)}
+            >
                 {#if session.command !== "system"}
                     <div
                         class="command-header"
@@ -276,12 +509,12 @@
                             >
                         </div>
                         <span class="collapse-icon">
-                            {session.collapsed ? "+" : "-"}
+                            {isCollapsed(session.id) ? "+" : "-"}
                         </span>
                     </div>
                 {/if}
 
-                {#if !session.collapsed}
+                {#if !isCollapsed(session.id)}
                     <div class="logs-container">
                         {#each session.logs as log}
                             <div class="log-line {log.type}">
@@ -332,30 +565,16 @@
 </div>
 
 <style>
-    /* Theme Variables */
-    :root {
-        --term-bg: #0c0c0c;
-        --term-session-bg: #000000;
-        --term-border: #333333;
-        --term-text: #cccccc;
-        --term-green: #00ff41;
-        --term-cyan: #00ffff;
-        --term-red: #ff3333;
-        --term-yellow: #ffff00;
-        --term-font: "Consolas", "Monaco", "Courier New", monospace;
-    }
-
     .terminal-container {
         background-color: var(--term-bg);
         color: var(--term-text);
         font-family: var(--term-font);
         border: 2px solid var(--term-border);
-        border-radius: 0; /* Strict Rectangle */
+        border-radius: 0;
         display: flex;
         flex-direction: column;
         height: 100%;
         position: relative;
-        /* Crisp edges */
         box-shadow: 4px 4px 0px #000000;
     }
 
@@ -367,7 +586,6 @@
         scrollbar-color: var(--term-border) var(--term-bg);
     }
 
-    /* Square Scrollbar for Webkit */
     .terminal-content::-webkit-scrollbar {
         width: 12px;
     }
@@ -390,7 +608,7 @@
     .command-session {
         border-bottom: 1px solid var(--term-border);
         background: var(--term-session-bg);
-        transition: none; /* Remove smooth transitions */
+        transition: none;
     }
 
     .command-session:hover {
@@ -424,7 +642,7 @@
         width: 16px;
         height: 16px;
         font-weight: bold;
-        border-radius: 0; /* Rectangle */
+        border-radius: 0;
         font-size: 14px;
     }
 
@@ -438,7 +656,6 @@
         color: var(--term-red);
     }
 
-    /* Block Spinner */
     .spinner {
         display: inline-block;
         width: 8px;
