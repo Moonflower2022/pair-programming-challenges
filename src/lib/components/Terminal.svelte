@@ -33,13 +33,16 @@
 
     export class CommandContext {
         private session: CommandSession;
+        private recomputeScroll: () => void;
 
-        constructor(session: CommandSession) {
+        constructor(session: CommandSession, recomputeScroll?: () => void) {
             this.session = session;
+            this.recomputeScroll = recomputeScroll || (() => {});
         }
 
         log(text: string, type: LogEntry["type"] = "info") {
             this.session.logs.push({ text, type, timestamp: new Date() });
+            this.recomputeScroll();
         }
 
         info(text: string) {
@@ -60,10 +63,12 @@
 
         complete() {
             this.session.status = "completed";
+            this.recomputeScroll();
         }
 
         fail() {
             this.session.status = "error";
+            this.recomputeScroll();
         }
     }
 </script>
@@ -99,9 +104,13 @@
     let sessions = $state<CommandSession[]>([]);
     let inputValue = $state("");
     let terminalRef: HTMLDivElement | undefined = $state();
+    let terminalContentRef: HTMLDivElement | undefined = $state();
     let inputRef: HTMLInputElement | undefined = $state();
     let commandHistory = $state<string[]>([]);
     let historyIndex = $state(-1);
+    let isNearBottom = $state(true);
+
+    const SCROLL_THRESHOLD = 150; // pixels from bottom
 
     // Show welcome message on mount
     $effect(() => {
@@ -124,15 +133,30 @@
         }
     });
 
-    // Auto-scroll effect
-    $effect(() => {
-        sessions.length;
-        if (terminalRef) {
-            requestAnimationFrame(() => {
-                terminalRef!.scrollTop = terminalRef!.scrollHeight;
-            });
+    function recomputeScroll() {
+        if (!terminalContentRef) return;
+
+        if (isNearBottom) {
+            terminalContentRef.scrollTop = terminalContentRef.scrollHeight;
         }
-    });
+
+        const { scrollTop, scrollHeight, clientHeight } = terminalContentRef;
+        const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+
+        isNearBottom = distanceFromBottom < SCROLL_THRESHOLD;
+    }
+
+    function scrollToBottom() {
+        if (!terminalContentRef) return;
+
+        terminalContentRef.scrollTo({
+            top: terminalContentRef.scrollHeight,
+            behavior: "smooth",
+        });
+
+        // Immediately set isNearBottom to true to resume auto-scrolling
+        isNearBottom = true;
+    }
 
     function handleSubmit(e: Event) {
         e.preventDefault();
@@ -156,7 +180,7 @@
         sessions.push(session);
 
         // Create context without updateFn
-        const context = new CommandContext(session);
+        const context = new CommandContext(session, recomputeScroll);
 
         // Clear input immediately
         inputValue = "";
@@ -215,7 +239,11 @@
     bind:this={terminalRef}
     onclick={focusInput}
 >
-    <div class="terminal-content">
+    <div
+        class="terminal-content"
+        bind:this={terminalContentRef}
+        onscroll={recomputeScroll}
+    >
         {#each sessions as session (session.id)}
             <div class="command-session" class:collapsed={session.collapsed}>
                 {#if session.command !== "system"}
@@ -262,6 +290,28 @@
             </div>
         {/each}
     </div>
+
+    {#if !isNearBottom}
+        <button
+            class="scroll-to-bottom"
+            onclick={scrollToBottom}
+            aria-label="Scroll to bottom"
+        >
+            <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+            >
+                <path d="M12 5v14M19 12l-7 7-7-7" />
+            </svg>
+            <span>New output</span>
+        </button>
+    {/if}
 
     <form onsubmit={handleSubmit} class="input-area">
         <span class="prompt">$</span>
@@ -485,6 +535,66 @@
 
     .log-line.warning::before {
         color: #fbbf24;
+    }
+
+    .scroll-to-bottom {
+        position: absolute;
+        bottom: 80px;
+        right: 1.5rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.625rem 1rem;
+        background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+        color: white;
+        border: none;
+        border-radius: 24px;
+        font-family: inherit;
+        font-size: 0.875rem;
+        font-weight: 500;
+        cursor: pointer;
+        box-shadow:
+            0 4px 12px rgba(139, 92, 246, 0.4),
+            0 0 0 1px rgba(255, 255, 255, 0.1);
+        transition: all 0.2s ease;
+        animation: slideUp 0.3s ease;
+        z-index: 10;
+    }
+
+    .scroll-to-bottom:hover {
+        transform: translateY(-2px);
+        box-shadow:
+            0 6px 16px rgba(139, 92, 246, 0.5),
+            0 0 0 1px rgba(255, 255, 255, 0.2);
+    }
+
+    .scroll-to-bottom:active {
+        transform: translateY(0);
+    }
+
+    .scroll-to-bottom svg {
+        animation: bounce 1.5s ease-in-out infinite;
+    }
+
+    @keyframes slideUp {
+        from {
+            opacity: 0;
+            transform: translateY(10px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    @keyframes bounce {
+        0%,
+        100% {
+            transform: translateY(0);
+        }
+        50% {
+            transform: translateY(3px);
+        }
     }
 
     .input-area {

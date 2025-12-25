@@ -4,27 +4,22 @@
     import { PythonEngine } from "$lib/engine/python";
     import { onMount } from "svelte";
     import YPartyKitProvider from "y-partykit/provider";
+    import { MonacoBinding } from "y-monaco";
+    import type * as monaco from "monaco-editor";
 
     const ENGINE = new PythonEngine();
 
     let monacoValue: string | typeof LOADING | undefined = $state(undefined);
-    let textSyncer: ((v: string) => void) | undefined = undefined;
+    let monacoEditor: monaco.editor.IStandaloneCodeEditor | undefined =
+        $state(undefined);
 
-    $effect(() => {
-        if (
-            monacoValue !== undefined &&
-            monacoValue !== LOADING &&
-            textSyncer !== undefined
-        ) {
-            textSyncer(monacoValue);
-        }
-    });
+    let binding: MonacoBinding | undefined;
 
     onMount(async () => {
         const Y = await import("yjs");
 
         const doc = new Y.Doc();
-        new YPartyKitProvider(
+        const provider = new YPartyKitProvider(
             `${document.location.hostname}:1999`,
             "pair-challenge",
             doc,
@@ -35,20 +30,19 @@
 
         const yText = doc.getText("shared");
 
-        yText.observe(() => {
-            monacoValue = yText.toString();
-        });
+        const waitForEditor = setInterval(() => {
+            const model = monacoEditor?.getModel();
 
-        monacoValue = yText.toString();
-
-        textSyncer = (v: string) => {
-            if (v === yText.toString()) {
-                return;
+            if (monacoEditor !== undefined && model != null) {
+                clearInterval(waitForEditor);
+                binding = new MonacoBinding(
+                    yText,
+                    model,
+                    new Set([monacoEditor]),
+                    provider.awareness,
+                );
             }
-
-            yText.delete(0, yText.length);
-            yText.insert(0, v);
-        };
+        }, 100);
     });
 
     async function handleCommand(command: string, context: CommandContext) {
@@ -85,14 +79,8 @@
             return;
         }
 
-        if (monacoValue === undefined) {
-            context.error("Editor is not initialized");
-            context.fail();
-            return;
-        }
-
         // Check if there's code to run
-        if (!monacoValue.trim()) {
+        if (monacoValue === undefined || !monacoValue.trim()) {
             context.warning("No code to execute");
             context.info("Write some Python code in the editor first");
             context.fail();
@@ -150,9 +138,7 @@
     }
 </script>
 
-{#if monacoValue !== undefined}
-    <Monaco bind:value={monacoValue} />
-{/if}
+<Monaco bind:value={monacoValue} bind:editor={monacoEditor} />
 
 <Terminal
     onCommand={handleCommand}

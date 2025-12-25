@@ -59,15 +59,14 @@
     import { onMount } from "svelte";
 
     let container: HTMLDivElement;
-    let editor = $state<monaco.editor.IStandaloneCodeEditor | undefined>(
-        undefined,
-    );
 
     type Props = {
-        value: string | typeof LOADING;
+        value?: string | typeof LOADING;
+        editor: monaco.editor.IStandaloneCodeEditor | undefined;
     };
 
-    let { value = $bindable(LOADING) }: Props = $props();
+    let { value = $bindable(LOADING), editor = $bindable(undefined) }: Props =
+        $props();
 
     $effect(() => {
         if (editor !== undefined && value !== LOADING) {
