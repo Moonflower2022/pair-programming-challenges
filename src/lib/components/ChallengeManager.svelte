@@ -6,12 +6,18 @@
         onActivate: (challengeId: string, config?: any) => void;
         onDeactivate: () => void;
         activeChallenge: Challenge | null;
+        activeChallengeId: string | null;
     }
 
-    let { onActivate, onDeactivate, activeChallenge }: Props = $props();
+    let { onActivate, onDeactivate, activeChallenge, activeChallengeId }: Props = $props();
 
     let isOpen = $state(false);
     let selectedChallenge = $state<string | null>(null);
+
+    // Sync selectedChallenge with active challenge
+    $effect(() => {
+        selectedChallenge = activeChallengeId;
+    });
 
     // Challenge-specific configs
     let activityTimerSeconds = $state(5);

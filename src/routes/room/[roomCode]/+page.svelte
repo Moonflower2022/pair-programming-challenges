@@ -23,6 +23,7 @@
     import type { Engine, EngineResult } from "$lib/engine";
 
     let activeChallenge: Challenge | null = $state(null);
+    let activeChallengeId: string | null = $state(null);
     let editorVisible = $state(true);
 
     let ENGINE:
@@ -80,11 +81,13 @@
         }
 
         activeChallenge.activate();
+        activeChallengeId = challengeId;
     }
 
     function deactivateChallenge() {
         activeChallenge?.deactivate();
         activeChallenge = null;
+        activeChallengeId = null;
     }
 
     // Get room code synchronously
@@ -138,6 +141,7 @@
 
     onMount(() => {
         const yText = yDoc.getText("shared");
+        const challengeState = yDoc.getMap("challenge");
 
         const waitForEditor = setInterval(() => {
             const model = monacoEditor?.getModel();
@@ -151,10 +155,20 @@
                     provider.awareness,
                 );
                 model.setEOL(monaco.editor.EndOfLineSequence.LF);
+
+                // Check for existing challenge after editor is ready
+                const data = challengeState.get("active");
+                if (
+                    data &&
+                    typeof data === "object" &&
+                    "id" in data &&
+                    typeof data.id === "string"
+                ) {
+                    const config = "config" in data ? data.config : undefined;
+                    activateChallenge(data.id, config);
+                }
             }
         }, 100);
-
-        const challengeState = yDoc.getMap("challenge");
 
         challengeState.observe(async () => {
             const data = challengeState.get("active");
@@ -279,6 +293,7 @@
     <div class="controls">
         <ChallengeManager
             {activeChallenge}
+            {activeChallengeId}
             onActivate={setChallenge}
             onDeactivate={clearChallenge}
         />
