@@ -19,27 +19,29 @@
     on:click
     on:keydown
     on:keypress
+    role="button"
+    tabindex="0"
 >
     <span
         class="line line--first"
         style="transition: {lineTransition}; {open
             ? 'transform: rotate(45deg)'
             : ''}"
-    />
+    ></span>
     {#if !duoLine}
         <span
             class="line line--middle"
             style="transition: {lineTransition}; {open
                 ? 'transform: rotate(45deg)'
                 : ''}"
-        />
+        ></span>
     {/if}
     <span
         class="line line--bottom"
         style="transition: {lineTransition}; {open
             ? 'transform: rotate(-45deg)'
             : ''}"
-    />
+    ></span>
 </div>
 
 <style>

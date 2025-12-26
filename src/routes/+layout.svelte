@@ -30,4 +30,20 @@
 		--term-yellow: #ffff00;
 		--term-font: "Consolas", "Monaco", "Courier New", monospace;
 	}
+
+	:global(.inline-error-message) {
+		color: #f48771;
+		font-style: italic;
+		margin-left: 0.5em;
+	}
+
+	:global(.error-line-highlight) {
+		background-color: rgba(255, 0, 0, 0.1);
+	}
+
+	:global(.error-glyph) {
+		background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="%23f48771"/><text x="8" y="11" text-anchor="middle" font-size="10" fill="white" font-weight="bold">✕</text></svg>')
+			center center no-repeat;
+		width: 16px;
+	}
 </style>

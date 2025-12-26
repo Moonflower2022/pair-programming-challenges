@@ -26,6 +26,12 @@
             case "activity-timer":
                 config = { seconds: activityTimerSeconds };
                 break;
+            case "blind-coding":
+                config = {
+                    showInterval: blindShowInterval,
+                    showDuration: blindShowDuration,
+                };
+                break;
         }
 
         onActivate(selectedChallenge, config);
@@ -89,6 +95,44 @@
                                 bind:value={activityTimerSeconds}
                                 min="1"
                                 max="30"
+                            />
+                        </label>
+                    </div>
+                {/if}
+
+                <label>
+                    <input
+                        type="radio"
+                        bind:group={selectedChallenge}
+                        value="alternating-lines"
+                    />
+                    Alternating Lines
+                </label>
+
+                <label>
+                    <input
+                        type="radio"
+                        bind:group={selectedChallenge}
+                        value="blind-coding"
+                    />
+                    Blind Coding
+                </label>
+                {#if selectedChallenge === "blind-coding"}
+                    <div class="config">
+                        <label>
+                            Show every (s): <input
+                                type="number"
+                                bind:value={blindShowInterval}
+                                min="5"
+                                max="60"
+                            />
+                        </label>
+                        <label>
+                            Show for (s): <input
+                                type="number"
+                                bind:value={blindShowDuration}
+                                min="1"
+                                max="10"
                             />
                         </label>
                     </div>

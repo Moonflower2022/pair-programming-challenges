@@ -8,6 +8,30 @@ export interface EngineResult {
     off(event: 'finished', listener: (data: { ok: true, value: any } | { ok: false, error: string }) => void): this;
 }
 
-export interface Engine<R extends EngineResult> {
+export function* walkAst(node: AstNode): Generator<AstNode> {
+    yield node;
+    for (const child of node.children()) {
+        yield* walkAst(child);
+    }
+}
+
+export interface SourcePosition {
+    line: number;
+    column: number;
+}
+
+export interface SourceRange {
+    start: SourcePosition;
+    end?: SourcePosition;
+}
+
+export interface AstNode {
+    type(): string;
+    children(): AstNode[];
+    position(): SourceRange | null;
+}
+
+export interface Engine<R extends EngineResult, A> {
     run(code: string): Promise<R>;
+    parse(code: string): Promise<A>;
 }
